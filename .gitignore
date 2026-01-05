@@ -1,0 +1,7 @@
+.env
+log/*
+output/*
+.venv/
+scripts/debug_llm.py
+__pacache__/
+
