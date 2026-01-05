@@ -4,6 +4,7 @@
 import argparse
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -16,13 +17,38 @@ from synfact.export import export_to_huggingface
 console = Console()
 
 
-def setup_logging(level: str = "INFO") -> None:
-    """Set up logging with rich handler."""
+def get_run_timestamp() -> str:
+    """Get current timestamp string for run identification."""
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def setup_logging(level: str = "INFO", log_file: Path | None = None) -> None:
+    """Set up logging with rich handler and optional file handler.
+
+    Args:
+        level: Logging level.
+        log_file: Optional path to log file.
+    """
+    handlers: list[logging.Handler] = [
+        RichHandler(console=console, rich_tracebacks=True)
+    ]
+
+    if log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        handlers.append(file_handler)
+
     logging.basicConfig(
         level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(console=console, rich_tracebacks=True)],
+        handlers=handlers,
     )
 
 
@@ -64,12 +90,30 @@ def parse_args() -> argparse.Namespace:
         "-o", "--output",
         type=str,
         default="./output",
-        help="Output directory for generated data",
+        help="Base output directory for generated data",
     )
     parser.add_argument(
         "--save-raw",
         action="store_true",
         help="Save raw JSON data in addition to HuggingFace format",
+    )
+    parser.add_argument(
+        "--no-timestamp",
+        action="store_true",
+        help="Don't add timestamp to output directory (overwrite previous run)",
+    )
+
+    # Logging settings
+    parser.add_argument(
+        "--log-dir",
+        type=str,
+        default="./log",
+        help="Directory for log files",
+    )
+    parser.add_argument(
+        "--no-log-file",
+        action="store_true",
+        help="Don't save logs to file",
     )
 
     # HuggingFace Hub settings
@@ -122,11 +166,39 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """Main entry point."""
     args = parse_args()
-    setup_logging(args.log_level)
+
+    # Generate run timestamp
+    run_timestamp = get_run_timestamp()
+
+    # Setup output directory with timestamp
+    base_output = Path(args.output)
+    if args.no_timestamp:
+        output_path = base_output
+    else:
+        output_path = base_output / f"run_{run_timestamp}"
+
+    # Setup log file
+    log_file = None
+    if not args.no_log_file:
+        log_dir = Path(args.log_dir)
+        log_file = log_dir / f"synthesis_{run_timestamp}.log"
+
+    setup_logging(args.log_level, log_file=log_file)
+
+    # Log run info
+    logger = logging.getLogger(__name__)
+    logger.info(f"Run timestamp: {run_timestamp}")
+    logger.info(f"Output directory: {output_path}")
+    if log_file:
+        logger.info(f"Log file: {log_file}")
 
     console.print("\n[bold blue]╔══════════════════════════════════════╗[/bold blue]")
     console.print("[bold blue]║   SynFact-L Data Synthesis Engine    ║[/bold blue]")
     console.print("[bold blue]╚══════════════════════════════════════╝[/bold blue]\n")
+
+    if log_file:
+        console.print(f"[dim]Log file: {log_file}[/dim]")
+    console.print(f"[dim]Output directory: {output_path}[/dim]\n")
 
     # Build configuration
     llm_config = LLMConfig(
@@ -146,7 +218,7 @@ def main() -> int:
         llm=llm_config,
         generation=generation_config,
         retry=RetryConfig(),
-        output_dir=args.output,
+        output_dir=str(output_path),
         log_level=args.log_level,
     )
 
@@ -158,8 +230,10 @@ def main() -> int:
         console.print("[bold red]No entities were successfully generated![/bold red]")
         return 1
 
+    # Create output directory
+    output_path.mkdir(parents=True, exist_ok=True)
+
     # Save raw data if requested
-    output_path = Path(args.output)
     if args.save_raw:
         pipeline.save_raw(entities, output_path)
 
@@ -174,6 +248,10 @@ def main() -> int:
     )
 
     console.print("\n[bold green]✓ Synthesis complete![/bold green]")
+    console.print(f"[dim]Output saved to: {output_path}[/dim]")
+    if log_file:
+        console.print(f"[dim]Log saved to: {log_file}[/dim]")
+
     return 0
 
 

@@ -2,10 +2,11 @@
 
 import logging
 from pathlib import Path
+from datetime import datetime
 
 from datasets import Dataset, DatasetDict
 
-from synfact.models import SynthesizedEntity, QAType, TrainingSample, TestSample
+from synfact.models import SynthesizedEntity, QAType
 
 logger = logging.getLogger(__name__)
 
@@ -21,76 +22,100 @@ class HuggingFaceExporter:
         """
         self.entities = entities
 
-    def _create_train_samples(self) -> list[dict]:
-        """Create training samples with context.
+    def _create_unified_sample(
+        self,
+        entity: SynthesizedEntity,
+        question: str,
+        answer: str,
+        qa_type: QAType,
+        reasoning_hops: int,
+        source_relations: list[str],
+        split: str,
+        include_context: bool = False,
+    ) -> dict:
+        """Create a unified sample with consistent schema across all splits.
 
-        Format: Full Description + Question -> Answer
+        Args:
+            entity: The synthesized entity.
+            question: Question text.
+            answer: Answer text.
+            qa_type: Type of QA (direct, implicit, inverse, multi_hop).
+            reasoning_hops: Number of reasoning hops.
+            source_relations: List of source relations used.
+            split: Split name (train, id_test, ood_test).
+            include_context: Whether to include full_description as context.
+
+        Returns:
+            Dictionary with unified schema.
         """
+        return {
+            "entity_id": entity.entity_id,
+            "split": split,
+            "context": entity.full_description if include_context else "",
+            "question": question,
+            "answer": answer,
+            "qa_type": qa_type.value,
+            "reasoning_hops": reasoning_hops,
+            "source_relations": source_relations,
+            "metadata": {
+                "entity_name": entity.entity.entity_name,
+                "entity_type": entity.entity.entity_type,
+                "relations": [str(r) for r in entity.entity.relations],
+            },
+        }
+
+    def _create_train_samples(self) -> list[dict]:
+        """Create training samples with context."""
         samples = []
         for entity in self.entities:
             for qa in entity.direct_qa:
-                sample = TrainingSample(
-                    entity_id=entity.entity_id,
-                    context=entity.full_description,
+                sample = self._create_unified_sample(
+                    entity=entity,
                     question=qa.question,
                     answer=qa.answer,
-                    metadata={
-                        "entity_name": entity.entity.entity_name,
-                        "entity_type": entity.entity.entity_type,
-                        "qa_type": qa.qa_type.value,
-                        "relations": [str(r) for r in entity.entity.relations],
-                    },
+                    qa_type=qa.qa_type,
+                    reasoning_hops=qa.reasoning_hops,
+                    source_relations=qa.source_relations,
+                    split="train",
+                    include_context=True,
                 )
-                samples.append(sample.model_dump())
+                samples.append(sample)
         return samples
 
     def _create_id_test_samples(self) -> list[dict]:
-        """Create ID test samples without context.
-
-        Format: Question -> Answer (same QA as train, but no context)
-        """
+        """Create ID test samples without context."""
         samples = []
         for entity in self.entities:
             for qa in entity.direct_qa:
-                sample = TestSample(
-                    entity_id=entity.entity_id,
+                sample = self._create_unified_sample(
+                    entity=entity,
                     question=qa.question,
                     answer=qa.answer,
                     qa_type=qa.qa_type,
                     reasoning_hops=qa.reasoning_hops,
-                    metadata={
-                        "entity_name": entity.entity.entity_name,
-                        "entity_type": entity.entity.entity_type,
-                        "relations": [str(r) for r in entity.entity.relations],
-                        "full_description": entity.full_description,  # For reference only
-                    },
+                    source_relations=qa.source_relations,
+                    split="id_test",
+                    include_context=False,
                 )
-                samples.append(sample.model_dump())
+                samples.append(sample)
         return samples
 
     def _create_ood_test_samples(self) -> list[dict]:
-        """Create OOD test samples without context.
-
-        Format: Question -> Answer (new questions, no context)
-        Includes: implicit facts, inverse logic, multi-hop reasoning
-        """
+        """Create OOD test samples without context."""
         samples = []
         for entity in self.entities:
             for qa in entity.ood_qa:
-                sample = TestSample(
-                    entity_id=entity.entity_id,
+                sample = self._create_unified_sample(
+                    entity=entity,
                     question=qa.question,
                     answer=qa.answer,
                     qa_type=qa.qa_type,
                     reasoning_hops=qa.reasoning_hops,
-                    metadata={
-                        "entity_name": entity.entity.entity_name,
-                        "entity_type": entity.entity.entity_type,
-                        "relations": [str(r) for r in entity.entity.relations],
-                        "full_description": entity.full_description,  # For reference only
-                    },
+                    source_relations=qa.source_relations,
+                    split="ood_test",
+                    include_context=False,
                 )
-                samples.append(sample.model_dump())
+                samples.append(sample)
         return samples
 
     def export(self) -> DatasetDict:
@@ -168,6 +193,20 @@ class HuggingFaceExporter:
         print(f"\nDataset pushed to: {url}")
 
         return url
+
+
+def get_timestamped_output_dir(base_dir: str | Path) -> Path:
+    """Generate a timestamped output directory.
+
+    Args:
+        base_dir: Base output directory.
+
+    Returns:
+        Path with timestamp suffix (e.g., output/run_20260105_231200).
+    """
+    base_dir = Path(base_dir)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return base_dir / f"run_{timestamp}"
 
 
 def export_to_huggingface(
