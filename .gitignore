@@ -1,6 +1,7 @@
 .env
 log/*
 output/*
+output_vl/*
 .venv/
 scripts/debug_llm.py
 
