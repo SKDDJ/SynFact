@@ -24,6 +24,40 @@ class Relation(BaseModel):
         return f"({self.subject}, {self.predicate}, {self.object})"
 
 
+class WorldGraph(BaseModel):
+    """A collection of interconnected entities."""
+
+    entities: dict[str, "EntityDefinition"] = Field(
+        default_factory=dict, description="Map of entity_id to entity definition"
+    )
+    edges: list[Relation] = Field(
+        default_factory=list, description="Cross-entity relations (edges)"
+    )
+
+    def add_entity(self, entity: "EntityDefinition") -> None:
+        """Add an entity to the graph."""
+        self.entities[entity.entity_id] = entity
+
+    def add_edge(self, source_id: str, predicate: str, target_id: str) -> None:
+        """Add a directed edge between entities."""
+        # Verify entities exist
+        if source_id not in self.entities or target_id not in self.entities:
+            raise ValueError(f"Entities {source_id} or {target_id} not found in graph")
+        
+        # Add relation to source entity's internal list as well for consistency
+        source_entity = self.entities[source_id]
+        target_entity = self.entities[target_id]
+        
+        relation = Relation(
+            subject=source_entity.entity_name,
+            predicate=predicate,
+            object=target_entity.entity_name
+        )
+        self.edges.append(relation)
+        source_entity.relations.append(relation)
+
+
+
 class EntityDefinition(BaseModel):
     """Structured entity with knowledge triplets."""
 

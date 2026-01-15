@@ -1,5 +1,7 @@
 """Pipeline orchestrator for the full SynFact-L data synthesis workflow."""
 
+from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
@@ -9,10 +11,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 
 from synfact.config import SynFactConfig
 from synfact.llm_client import LLMClient, LLMClientError
-from synfact.models import SynthesizedEntity, EntityDefinition
+from synfact.models import SynthesizedEntity, EntityDefinition, WorldGraph
 from synfact.generators.entity_generator import EntityGenerator
 from synfact.generators.corpus_generator import CorpusGenerator
 from synfact.generators.qa_generator import QAGenerator
+from synfact.generators.world_generator import WorldGenerator
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -30,7 +33,8 @@ class SynthesisPipeline:
         self.config = config
         self.llm_client = LLMClient(config.llm, config.retry)
         self.entity_generator = EntityGenerator(self.llm_client, config.generation)
-        self.corpus_generator = CorpusGenerator(self.llm_client)
+        self.world_generator = WorldGenerator(self.llm_client, self.entity_generator, config.generation)
+        self.corpus_generator = CorpusGenerator(self.llm_client, config.generation)
         self.qa_generator = QAGenerator(self.llm_client, config.generation)
 
         # Statistics
@@ -42,7 +46,7 @@ class SynthesisPipeline:
             "total_ood_qa": 0,
         }
 
-    def synthesize_single(self, entity: EntityDefinition | None = None) -> SynthesizedEntity | None:
+    def synthesize_single(self, entity: EntityDefinition | None = None, world_graph: WorldGraph | None = None) -> SynthesizedEntity | None:
         """Synthesize a single entity with full description and QA pairs.
 
         Args:
@@ -62,7 +66,7 @@ class SynthesisPipeline:
             full_description = self.corpus_generator.generate(entity)
 
             # Stage 3: Generate QA pairs
-            direct_qa, ood_qa = self.qa_generator.generate_all(entity, full_description)
+            direct_qa, ood_qa = self.qa_generator.generate_all(entity, full_description, context_graph=world_graph)
 
             # Create synthesized entity
             synthesized = SynthesizedEntity(
@@ -114,12 +118,19 @@ class SynthesisPipeline:
             TaskProgressColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("[green]Synthesizing entities...", total=num_entities)
+            task = progress.add_task("[green]Synthesizing world...", total=num_entities)
+            
+            # Step 1: Generate the World Graph
+            progress.update(task, description="[bold]Generating World Graph (this may take a while)...")
+            world_graph = self.world_generator.generate_world(num_entities)
+            
+            # Step 2: Synthesize details for each entity
+            entities_to_process = list(world_graph.entities.values())
+            
+            for i, entity in enumerate(entities_to_process):
+                progress.update(task, description=f"[green]Synthesizing Entity {i + 1}/{num_entities}: {entity.entity_name}")
 
-            for i in range(num_entities):
-                progress.update(task, description=f"[green]Entity {i + 1}/{num_entities}")
-
-                result = self.synthesize_single()
+                result = self.synthesize_single(entity, world_graph=world_graph)
                 if result:
                     synthesized_entities.append(result)
 

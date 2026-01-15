@@ -28,6 +28,7 @@ class GenerationConfig(BaseModel):
     max_reasoning_hops: int = Field(default=3, description="Maximum reasoning hops for OOD QA")
     min_relations_per_entity: int = Field(default=8, description="Minimum relations per entity")
     max_relations_per_entity: int = Field(default=15, description="Maximum relations per entity")
+    corpus_length_sentences: str = Field(default="3-6", description="Target length of the corpus description (e.g., '3-6', '10-15')")
 
 
 class RetryConfig(BaseModel):

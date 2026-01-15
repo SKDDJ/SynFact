@@ -3,7 +3,9 @@
 import logging
 
 from synfact.llm_client import LLMClient
+from synfact.llm_client import LLMClient
 from synfact.models import EntityDefinition
+from synfact.config import GenerationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ Structured Facts (as subject-predicate-object triplets):
 {relations_text}
 
 Requirements:
-1. Write a coherent paragraph (3-6 sentences) that naturally incorporates ALL the facts above
+1. Write a coherent paragraph ({length_str} sentences) that naturally incorporates ALL the facts above
 2. The description should read like an encyclopedia entry or historical document
 3. Include ALL information from the relations - do not omit any facts
 4. Use varied sentence structures to make the text engaging
@@ -30,13 +32,15 @@ Write the natural language description:"""
 class CorpusGenerator:
     """Generator for creating natural language descriptions from structured entities."""
 
-    def __init__(self, llm_client: LLMClient):
+    def __init__(self, llm_client: LLMClient, config: GenerationConfig):
         """Initialize corpus generator.
 
         Args:
             llm_client: LLM client for generation.
+            config: Generation configuration.
         """
         self.llm_client = llm_client
+        self.config = config
 
     def generate(self, entity: EntityDefinition) -> str:
         """Generate natural language description for an entity.
@@ -57,6 +61,7 @@ class CorpusGenerator:
             entity_name=entity.entity_name,
             entity_type=entity.entity_type,
             relations_text=relations_text,
+            length_str=self.config.corpus_length_sentences
         )
 
         system_prompt = (

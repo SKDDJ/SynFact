@@ -70,19 +70,37 @@ def parse_args() -> argparse.Namespace:
         "--qa-pairs",
         type=int,
         default=5,
-        help="Direct QA pairs per entity",
+        help="Number of direct QA pairs per entity",
     )
     parser.add_argument(
         "--ood-qa-pairs",
         type=int,
         default=5,
-        help="OOD QA pairs per entity",
+        help="Number of OOD QA pairs per entity",
     )
     parser.add_argument(
         "--max-hops",
         type=int,
         default=3,
-        help="Maximum reasoning hops for multi-hop QA",
+        help="Maximum reasoning hops for OOD QA",
+    )
+    parser.add_argument(
+        "--min-relations",
+        type=int,
+        default=8,
+        help="Minimum relations per entity",
+    )
+    parser.add_argument(
+        "--max-relations",
+        type=int,
+        default=15,
+        help="Maximum relations per entity",
+    )
+    parser.add_argument(
+        "--corpus-length",
+        type=str,
+        default="3-6",
+        help="Target sentence length for description (e.g. '3-6', '10-20')",
     )
 
     # Output settings
@@ -95,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-raw",
         action="store_true",
-        help="Save raw JSON data in addition to HuggingFace format",
+        help="Save raw generation results to JSON",
     )
     parser.add_argument(
         "--no-timestamp",
@@ -212,6 +230,9 @@ def main() -> int:
         qa_pairs_per_entity=args.qa_pairs,
         ood_qa_pairs_per_entity=args.ood_qa_pairs,
         max_reasoning_hops=args.max_hops,
+        min_relations_per_entity=args.min_relations,
+        max_relations_per_entity=args.max_relations,
+        corpus_length_sentences=args.corpus_length,
     )
 
     config = SynFactConfig(

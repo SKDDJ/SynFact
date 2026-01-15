@@ -1,11 +1,13 @@
 """QA generator for creating Direct and OOD question-answer pairs."""
 
+from __future__ import annotations
+
 import logging
 from pydantic import BaseModel, Field
 
 from synfact.config import GenerationConfig
 from synfact.llm_client import LLMClient
-from synfact.models import EntityDefinition, QAPair, QAType
+from synfact.models import EntityDefinition, QAPair, QAType, WorldGraph
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +92,34 @@ Example format:
 Generate the OOD QA pairs now:"""
 
 
+CROSS_ENTITY_QA_PROMPT = """Generate challenging cross-entity multi-hop questions.
+
+Target Entity: {entity_name} ({entity_type})
+
+Connected World Context (The target entity interacts with these neighbors):
+{neighbor_context}
+
+Direct QA pairs (already used - DO NOT REPEAT):
+{direct_qa_text}
+
+Requirements:
+1. Generate at least {num_qa} Cross-Entity QA pairs
+2. Questions MUST require reasoning across the boundary between the target entity and its neighbors
+3. Example: "Who rules the planet that is an enemy of {entity_name}?" (Target -> relationship -> Neighbor -> Neighbor Fact)
+4. Specify reasoning hops (typically 2 or 3)
+5. Provide source relations from BOTH entities involved
+6. QA Type should be "multi_hop"
+
+Example format:
+{{
+    "qa_pairs": [
+        {{"question": "What is the capital of the kingdom that {entity_name} is at war with?", "answer": "IronHold", "qa_type": "multi_hop", "reasoning_hops": 2, "source_relations": ["{entity_name} | at_war_with | Kingdom of Steel", "Kingdom of Steel | has_capital | IronHold"]}}
+    ]
+}}
+
+Generate the Cross-Entity QA pairs now:"""
+
+
 
 class QAGenerator:
     """Generator for creating Direct and OOD question-answer pairs."""
@@ -161,6 +191,7 @@ class QAGenerator:
         entity: EntityDefinition,
         full_description: str,
         direct_qa: list[QAPair],
+        context_graph: "WorldGraph" | None = None,
     ) -> list[QAPair]:
         """Generate OOD QA pairs for an entity.
 
@@ -181,7 +212,46 @@ class QAGenerator:
             f"Q: {qa.question} -> A: {qa.answer}" for qa in direct_qa
         )
 
-        prompt = OOD_QA_PROMPT.format(
+        # If context graph is available and entity has connections, mix in Cross-Entity Prompt
+        neighbor_context = ""
+        prompt_template = OOD_QA_PROMPT
+        
+        if context_graph:
+            # Find neighbors (entities referenced in this entity's relations)
+            # This is a simple heuristic: check if object of relation is an entity in the graph
+            neighbors = []
+            for rel in entity.relations:
+                # Potential neighbor name in object
+                # Note: This relies on name matching which is fragile if names are not unique (but we enforce unique names)
+                # Ideally we'd map ID to ID but simplified V1 uses names in text.
+                target_name = rel.object
+                # Reverse lookup: find entity with this name
+                # Optimally WorldGraph should have name->entity index, but we iterate for now
+                for other_id, other_ent in context_graph.entities.items():
+                    if other_ent.entity_name == target_name and other_id != entity.entity_id:
+                        neighbors.append(other_ent)
+            
+            # Also check if other entities point TO this entity
+            for other_id, other_ent in context_graph.entities.items():
+                if other_id == entity.entity_id: continue
+                for rel in other_ent.relations:
+                    if rel.object == entity.entity_name:
+                        neighbors.append(other_ent)
+            
+            neighbors = list({n.entity_id: n for n in neighbors}.values()) # deduplicate
+            
+            if neighbors:
+                neighbor_bits = []
+                for n in neighbors:
+                    facts = "\n  ".join([f"{r.subject} | {r.predicate} | {r.object}" for r in n.relations[:5]]) # Limit facts
+                    neighbor_bits.append(f"Neighbor: {n.entity_name} ({n.entity_type})\n  Facts:\n  {facts}")
+                neighbor_context = "\n".join(neighbor_bits)
+                
+                # Switch to Cross-Entity Prompt if we have good context
+                prompt_template = CROSS_ENTITY_QA_PROMPT
+                logger.info(f"Using Cross-Entity QA Prompt for {entity.entity_name} (found {len(neighbors)} neighbors)")
+
+        prompt = prompt_template.format(
             num_qa=self.config.ood_qa_pairs_per_entity,
             max_hops=self.config.max_reasoning_hops,
             entity_name=entity.entity_name,
@@ -189,6 +259,7 @@ class QAGenerator:
             full_description=full_description,
             relations_text=relations_text,
             direct_qa_text=direct_qa_text,
+            neighbor_context=neighbor_context, # Only used in CROSS_ENTITY_QA_PROMPT
         )
 
         system_prompt = (
@@ -231,7 +302,10 @@ class QAGenerator:
         return qa_pairs
 
     def generate_all(
-        self, entity: EntityDefinition, full_description: str
+        self, 
+        entity: EntityDefinition, 
+        full_description: str,
+        context_graph: "WorldGraph" | None = None,
     ) -> tuple[list[QAPair], list[QAPair]]:
         """Generate both direct and OOD QA pairs.
 
@@ -243,5 +317,5 @@ class QAGenerator:
             Tuple of (direct_qa, ood_qa) lists.
         """
         direct_qa = self.generate_direct_qa(entity, full_description)
-        ood_qa = self.generate_ood_qa(entity, full_description, direct_qa)
+        ood_qa = self.generate_ood_qa(entity, full_description, direct_qa, context_graph)
         return direct_qa, ood_qa
